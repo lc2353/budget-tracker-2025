@@ -1,53 +1,61 @@
 package main
 
 import (
+	"backend/internal/api"
+	"backend/internal/db"
+	config "backend/internal/setup"
 	"context"
+	"errors"
 	"log"
+	"net/http"
+	"os"
+	"os/signal"
 	"time"
-
-	"cloud.google.com/go/firestore"
-	firebase "firebase.google.com/go/v4"
-	"google.golang.org/api/option"
-
-	"backend/internal"
 )
-
-var firestoreClient *firestore.Client
 
 func main() {
 	cfg := config.LoadConfig()
 
 	ctx := context.Background()
-	var opts []option.ClientOption
-
-	if cfg.FirestoreCredentialPath != "" {
-		opts = append(opts, option.WithCredentialsFile(cfg.FirestoreCredentialPath))
-	}
-
-	app, err := firebase.NewApp(ctx, nil, opts...)
+	firestoreClient, err := db.NewFirestoreClient(ctx, cfg.FirestoreCredentialsPath)
 	if err != nil {
-		log.Fatalf("error initializing app: %v", err)
+		log.Fatalf("Failed to initialize Firestore client: %v", err)
+	}
+	defer func() {
+		if err := firestoreClient.Close(); err != nil {
+			log.Printf("Error closing Firestore client: %v", err)
+		}
+		log.Println("Firestore client closed.")
+	}()
+	log.Println("Firestore client initialized successfully!")
+
+	repo := db.NewFirestoreRepository(firestoreClient)
+
+	router := api.NewRouter(repo, cfg)
+
+	server := &http.Server{
+		Addr:         ":8080",
+		Handler:      router,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 
-	firestoreClient, err = app.Firestore(ctx)
-	if err != nil {
-		log.Fatalf("error getting Firestore client: %v", err)
-	}
+	go func() {
+		log.Printf("Server listening on %s", server.Addr)
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("Server failed to listen: %v", err)
+		}
+	}()
 
-	log.Println("Firestore client initialized successfully")
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt)
+	<-quit
 
-	testDoc := map[string]interface{}{
-		"transactionName": "coffee",
-		"description":     "starbucks latte",
-		"amount":          4.76,
-		"category":        "Coffee",
-		"insertedAt":      time.Now(),
-	}
-
-	_, _, err = firestoreClient.Collection("test-txns").Add(ctx, testDoc)
-	if err != nil {
-		log.Printf("Failed to add setup test document: %v", err)
-	} else {
-		log.Println("Setup test document added to 'test-txns' collection.")
+	log.Println("Shutting down server...")
+	ctxTimeout, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := server.Shutdown(ctxTimeout); err != nil {
+		log.Fatalf("Server forced to shutdown: %v", err)
 	}
 }
