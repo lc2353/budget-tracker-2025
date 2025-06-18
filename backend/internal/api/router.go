@@ -21,7 +21,14 @@ func NewRouter(repo db.Repository, cfg *config.AppConfig) http.Handler {
 		Config: cfg,
 	}
 
+	r.HandleFunc("/health", deps.HealthCheckHandler).Methods("GET")
+
 	r.HandleFunc("/transactions", deps.CreateTransactionHandler).Methods("POST")
+	r.HandleFunc("/transactions/{id}", deps.GetTransactionByIDHandler).Methods("GET")
+	r.HandleFunc("/transactions", deps.ListTransactionsHandler).Methods("GET")
+	r.HandleFunc("/transactions/bulk", deps.BulkAddTransactionsHandler).Methods("POST")
+	r.HandleFunc("/transactions/{id}", deps.UpdateTransactionHandler).Methods("PATCH")
+	r.HandleFunc("/transactions/{id}", deps.DeleteTransactionHandler).Methods("DELETE")
 
 	c := cors.New(cors.Options{
 		AllowedOrigins:   cfg.CorsAllowedOrigins,
